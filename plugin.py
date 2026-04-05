@@ -9,10 +9,10 @@
 #
 
 """
-<plugin key="SolarEdge_ModbusTCP" name="SolarEdge ModbusTCP" author="Addie Janssen" version="1.1.5" externallink="https://github.com/addiejanssen/domoticz-solaredge-modbustcp-plugin">
+<plugin key="SolarEdge_ModbusTCP" name="SolarEdge ModbusTCP" author="Addie Janssen" version="1.1.6" externallink="https://github.com/addiejanssen/domoticz-solaredge-modbustcp-plugin">
     <description>
         <h2><br/>SolarEdge_ModbusTCP</h2>
-        <p>Version 1.1.5</p>
+        <p>Version 1.1.6</p>
     </description>
 
     <params>
@@ -71,25 +71,32 @@ from pymodbus.exceptions import ConnectionException
 # The number of samples stored depends on the interval used to collect the value from the inverter itself.
 #
 
-class Average:
+class SlidingWindow:
 
     def __init__(self):
         self.samples = []
         self.max_samples = 30
 
-    def set_max_samples(self, max):
-        self.max_samples = max
+    def set_max_samples(self, count):
+        self.max_samples = count
         if self.max_samples < 1:
             self.max_samples = 1
 
-    def update(self, new_value, scale = 0):
+    def update(self, new_value, scale=0):
         self.samples.append(new_value * (10 ** scale))
-        while (len(self.samples) > self.max_samples):
-            del self.samples[0]
+        self.samples = self.samples[-self.max_samples:]
 
-        Domoticz.Debug("Average: {} - {} values".format(self.get(), len(self.samples)))
+        Domoticz.Debug("{}: {} - {} values".format(self.__class__.__name__, self.get(), len(self.samples)))
 
     def get(self):
+        raise NotImplementedError
+
+
+class Average(SlidingWindow):
+
+    def get(self):
+        if not self.samples:
+            return 0
         return sum(self.samples) / len(self.samples)
 
 #
@@ -100,25 +107,11 @@ class Average:
 # The number of samples stored depends on the interval used to collect the value from the inverter itself.
 #
 
-class Maximum:
-
-    def __init__(self):
-        self.samples = []
-        self.max_samples = 30
-
-    def set_max_samples(self, max):
-        self.max_samples = max
-        if self.max_samples < 1:
-            self.max_samples = 1
-
-    def update(self, new_value, scale = 0):
-        self.samples.append(new_value * (10 ** scale))
-        while (len(self.samples) > self.max_samples):
-            del self.samples[0]
-
-        Domoticz.Debug("Maximum: {} - {} values".format(self.get(), len(self.samples)))
+class Maximum(SlidingWindow):
 
     def get(self):
+        if not self.samples:
+            return 0
         return max(self.samples)
 
 #
@@ -268,7 +261,7 @@ class BasePlugin:
 
     def onStart(self):
 
-        self.add_devices = bool(Parameters["Mode1"])
+        self.add_devices = Parameters["Mode1"] == "Yes"
 
         _IMAGE = "solaredge"
         creating_new_icon = _IMAGE not in Images
@@ -287,7 +280,7 @@ class BasePlugin:
         # Domoticz will generate graphs showing an interval of 5 minutes.
         # Calculate the number of samples to store over a period of 5 minutes.
 
-        self.max_samples = 300 / int(Parameters["Mode2"])
+        self.max_samples = 300 // int(Parameters["Mode2"])
 
         # Now set the interval at which the information is collected accordingly.
 
@@ -336,13 +329,15 @@ class BasePlugin:
                 inverter_values = self.inverter.read_all()
             except ConnectionException:
                 inverter_values = None
-                Domoticz.Error("ConnectionException")
+                self._LOOKUP_TABLE = None
+                self.retryafter = datetime.now() + self.retrydelay
+                Domoticz.Error("ConnectionException; retrying after: {}".format(self.retryafter))
             else:
 
                 if inverter_values:
 
                     if "Mode5" in Parameters and (Parameters["Mode5"] == "Extra" or Parameters["Mode5"] == "Debug"):
-                        to_log = inverter_values
+                        to_log = dict(inverter_values)
                         if "c_serialnumber" in to_log:
                             to_log.pop("c_serialnumber")
                         Domoticz.Log("inverter values: {}".format(json.dumps(to_log, indent=4, sort_keys=False)))
@@ -373,7 +368,7 @@ class BasePlugin:
                                 except KeyError as e:
                                     to_lookup = -1
                                     Domoticz.Error("missing data in modbus inverter_values: "+str(e))
-                                    return #data is missing, no point to continue for this device
+                                    continue #data is missing, skip this device
 
                                 if to_lookup >= 0 and to_lookup < len(lookup_table):
                                     value = lookup_table[to_lookup]
@@ -393,9 +388,8 @@ class BasePlugin:
 
                                     value = m.get()
                                 except KeyError as e:
-                                    value = "Key not found in inverter_values table: {}".format(inverter_values)
                                     Domoticz.Error("missing data in modbus inverter_values: "+str(e))
-                                    return
+                                    continue
                                     
                             # When there is no math object then just store the latest value.
                             # Some values from the inverter need to be scaled before they can be stored.
@@ -407,7 +401,7 @@ class BasePlugin:
                                     value = inverter_values[unit[Column.MODBUSNAME]] * (10 ** inverter_values[unit[Column.MODBUSSCALE]])
                                 except KeyError as e:
                                     Domoticz.Error("missing data in modbus inverter_values: "+str(e))
-                                    return
+                                    continue
 
                             # Some values require no action but storing in Domoticz.
 
@@ -416,9 +410,8 @@ class BasePlugin:
                                 try:
                                     value = inverter_values[unit[Column.MODBUSNAME]]
                                 except KeyError as e:
-                                    value = "Key not found in inverter_values table: {}".format(inverter_values)
                                     Domoticz.Error("missing data in modbus inverter_values: "+str(e))
-                                    return
+                                    continue
 
                             Domoticz.Debug("value = {}".format(value))
 
@@ -569,9 +562,20 @@ class BasePlugin:
             Domoticz.Log("Retrying to communicate with inverter after: {}".format(self.retryafter))
 
 
+    #
+    # onStop is called by Domoticz when the plugin is stopped.
+    #
+
+    def onStop(self):
+        Domoticz.Debug("onStop")
+        try:
+            self.inverter.client.close()
+        except Exception as e:
+            Domoticz.Debug("onStop: {}".format(e))
+
+
 #
 # Instantiate the plugin and register the supported callbacks.
-# Currently that is only onStart() and onHeartbeat()
 #
 
 global _plugin
@@ -580,6 +584,10 @@ _plugin = BasePlugin()
 def onStart():
     global _plugin
     _plugin.onStart()
+
+def onStop():
+    global _plugin
+    _plugin.onStop()
 
 def onHeartbeat():
     global _plugin
