@@ -103,7 +103,7 @@ import solaredge_modbus
 import json
 
 from datetime import datetime, timedelta
-from enum import IntEnum, unique, auto
+from enum import IntEnum, unique
 from pymodbus.exceptions import ConnectionException
 
 #
@@ -371,7 +371,6 @@ class BasePlugin:
             try:
                 inverter_values = self.inverter.read_all()
             except ConnectionException:
-                inverter_values = None
                 self._LOOKUP_TABLE = None
                 self.retryafter = datetime.now() + self.retrydelay
                 Domoticz.Error("ConnectionException; retrying after: {}".format(self.retryafter))
@@ -522,7 +521,6 @@ class BasePlugin:
                 # Try again in the future.
 
                 self.retryafter = datetime.now() + self.retrydelay
-                inverter_values = None
 
                 Domoticz.Log("Connection Exception when trying to contact: {}:{} Device Address: {}".format(Parameters["Address"], Parameters["Port"], Parameters["Mode3"]))
                 Domoticz.Log("Retrying to communicate with inverter after: {}".format(self.retryafter))
