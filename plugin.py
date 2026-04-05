@@ -11,21 +11,55 @@
 """
 <plugin key="SolarEdge_ModbusTCP" name="SolarEdge ModbusTCP" author="Addie Janssen" version="1.1.6" externallink="https://github.com/addiejanssen/domoticz-solaredge-modbustcp-plugin">
     <description>
-        <h2><br/>SolarEdge_ModbusTCP</h2>
+        <h2><br/>SolarEdge ModbusTCP Plugin</h2>
         <p>Version 1.1.6</p>
+        <p>Reads data from SolarEdge power inverters over ModbusTCP and creates Domoticz devices for:</p>
+        <ul>
+            <li>Inverter status and vendor status</li>
+            <li>AC/DC current, voltage and power</li>
+            <li>Frequency, power factor and temperature</li>
+            <li>Energy production (lifetime and daily)</li>
+        </ul>
+        <br/><span style="font-weight: bold;">Requirements:</span>
+        <ul>
+            <li>The inverter must be connected to the network (wired or wireless).</li>
+            <li>Modbus/TCP must be enabled on the inverter (see inverter documentation).</li>
+            <li>Python 3.x and the <i>solaredge_modbus</i> library must be installed.</li>
+        </ul>
+        <br/><span style="font-weight: bold;">Connection settings</span>
     </description>
 
     <params>
-        <param field="Address" label="Inverter IP Address" width="150px" required="true" />
-        <param field="Port" label="Inverter Port Number" width="100px" required="true" default="502" />
-        <param field="Mode3" label="Inverter Modbus device address" width="100px" required="true" default="1" />
-        <param field="Mode1" label="Add missing devices" width="100px" required="true" default="Yes" >
+        <param field="Address" label="Inverter IP Address" width="150px" required="true">
+            <description>
+                <br/><span style="color: yellow;">IP address or hostname of the SolarEdge inverter.</span>
+            </description>
+        </param>
+        <param field="Port" label="Inverter Port Number" width="100px" required="true" default="502">
+            <description>
+                <br/><span style="color: yellow;">Modbus TCP port of the inverter (default: 502).</span>
+            </description>
+        </param>
+        <param field="Mode3" label="Inverter Modbus device address" width="100px" required="true" default="1">
+            <description>
+                <br/><span style="color: yellow;">Modbus unit/slave address of the inverter (default: 1).</span>
+            </description>
+        </param>
+        <param field="Mode1" label="Add missing devices" width="100px" required="true" default="Yes">
+            <description>
+                <br/>Set to <b>Yes</b> to automatically create devices when the plugin starts.<br/>
+                Set to <b>No</b> after manually deleting unused devices to prevent them from being recreated on restart.
+            </description>
             <options>
                 <option label="Yes" value="Yes" default="true" />
                 <option label="No" value="No" />
             </options>
         </param>
-        <param field="Mode2" label="Interval" width="100px" required="true" default="5" >
+        <param field="Mode2" label="Interval" width="100px" required="true" default="5">
+            <description>
+                <br/>How often the plugin reads data from the inverter.<br/>
+                Shorter intervals give more accurate graphs but increase network traffic and inverter load.
+            </description>
             <options>
                 <option label="1  second"  value="1" />
                 <option label="2  seconds" value="2" />
@@ -39,12 +73,21 @@
             </options>
         </param>
         <param field="Mode4" label="Auto Avg/Max math" width="100px">
+            <description>
+                <br/><b>Enabled</b>: Domoticz graphs show averaged (or maximum) values over the 5-minute graph interval.<br/>
+                <b>Disabled</b>: Domoticz graphs show the last retrieved value only.
+            </description>
             <options>
                 <option label="Enabled" value="math_enabled" default="true" />
                 <option label="Disabled" value="math_disabled"/>
             </options>
         </param>
         <param field="Mode5" label="Log level" width="100px">
+            <description>
+                <br/><b>Normal</b>: only errors and status messages are logged.<br/>
+                <b>Extra</b>: all values received from the inverter are printed in the log.<br/>
+                <b>Debug</b>: full debug output including internal state.
+            </description>
             <options>
                 <option label="Normal" value="Normal" default="true" />
                 <option label="Extra" value="Extra"/>
