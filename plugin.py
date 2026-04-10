@@ -291,6 +291,10 @@ class BasePlugin:
 
         self.add_devices = False
 
+        # The Domoticz image ID for the SolarEdge icon.
+
+        self.imageID = 0
+
         # When there is an issue contacting the inverter, the plugin will retry after a certain retry delay.
         # The actual time after which the plugin will try again is stored in the retry after variable.
         # According to the documenation, the inverter may need up to 2 minutes to "reset".
@@ -329,7 +333,7 @@ class BasePlugin:
 
         Domoticz.Heartbeat(int(Parameters["Mode2"]))
 
-        if Parameters["Mode5"] == "Debug":
+        if "Mode5" in Parameters and Parameters["Mode5"] == "Debug":
             Domoticz.Debugging(1)
         else:
             Domoticz.Debugging(0)
@@ -344,7 +348,7 @@ class BasePlugin:
 
         self.inverter = solaredge_modbus.Inverter(
             host=Parameters["Address"],
-            port=Parameters["Port"],
+            port=int(Parameters["Port"]),
             timeout=5,
             unit=int(Parameters["Mode3"]) if Parameters["Mode3"] else 1
         )
@@ -552,7 +556,7 @@ class BasePlugin:
                         # Set the number of samples on all the math objects.
 
                         for unit in self._LOOKUP_TABLE:
-                            if unit[Column.MATH]  and Parameters["Mode4"] == "math_enabled":
+                            if unit[Column.MATH] and Parameters["Mode4"] == "math_enabled":
                                 unit[Column.MATH].set_max_samples(self.max_samples)
 
 
@@ -599,6 +603,7 @@ class BasePlugin:
                                     ).Create()
                 else:
                     Domoticz.Log("Connection established with: {}:{} Device Address: {}. BUT... inverter returned no information".format(Parameters["Address"], Parameters["Port"], Parameters["Mode3"]))
+                    self.retryafter = datetime.now() + self.retrydelay
                     Domoticz.Log("Retrying to communicate with inverter after: {}".format(self.retryafter))
                     Domoticz.Debug("inverter_values = '" +format(inverter_values)+"'")
         else:
