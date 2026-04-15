@@ -393,6 +393,7 @@ class BasePlugin:
 
                     updated = 0
                     device_count = 0
+                    missing_keys = []
 
                     # Now process each unit in the table.
 
@@ -414,7 +415,7 @@ class BasePlugin:
                                     to_lookup = int(inverter_values[unit[Column.MODBUSNAME]])
                                 except KeyError as e:
                                     to_lookup = -1
-                                    Domoticz.Error("missing data in modbus inverter_values: "+str(e))
+                                    missing_keys.append(str(e))
                                     continue #data is missing, skip this device
 
                                 if to_lookup >= 0 and to_lookup < len(lookup_table):
@@ -435,7 +436,7 @@ class BasePlugin:
 
                                     value = m.get()
                                 except KeyError as e:
-                                    Domoticz.Error("missing data in modbus inverter_values: "+str(e))
+                                    missing_keys.append(str(e))
                                     continue
                                     
                             # When there is no math object then just store the latest value.
@@ -447,7 +448,7 @@ class BasePlugin:
                                 try:
                                     value = inverter_values[unit[Column.MODBUSNAME]] * (10 ** inverter_values[unit[Column.MODBUSSCALE]])
                                 except KeyError as e:
-                                    Domoticz.Error("missing data in modbus inverter_values: "+str(e))
+                                    missing_keys.append(str(e))
                                     continue
 
                             # Some values require no action but storing in Domoticz.
@@ -457,7 +458,7 @@ class BasePlugin:
                                 try:
                                     value = inverter_values[unit[Column.MODBUSNAME]]
                                 except KeyError as e:
-                                    Domoticz.Error("missing data in modbus inverter_values: "+str(e))
+                                    missing_keys.append(str(e))
                                     continue
 
                             Domoticz.Debug("value = {}".format(value))
@@ -490,6 +491,14 @@ class BasePlugin:
 
                         else:
                             Domoticz.Debug("-> NOT found in Devices")
+
+                    if missing_keys:
+                        Domoticz.Error(
+                            "Inverter returned incomplete data; {} field(s) missing: {}. "
+                            "This can happen when the inverter is sleeping (e.g. at night) or when there is a communication issue.".format(
+                                len(missing_keys), ", ".join(missing_keys)
+                            )
+                        )
 
                     Domoticz.Log("Updated {} values out of {}".format(updated, device_count))
                 else:
