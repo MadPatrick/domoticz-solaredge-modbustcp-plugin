@@ -102,6 +102,7 @@ import Domoticz
 import inspect
 import json
 import sys
+import traceback
 import types
 
 from datetime import datetime, timedelta
@@ -119,6 +120,8 @@ def _apply_pymodbus_legacy_compat():
         class Endian:
             BIG = "big"
             LITTLE = "little"
+            Big = "big"
+            Little = "little"
 
         pymodbus_constants.Endian = Endian
 
@@ -229,20 +232,58 @@ def _apply_pymodbus_legacy_compat():
     except ImportError:
         return
 
+    if "pymodbus.client.sync" not in sys.modules:
+        try:
+            import pymodbus.client.sync  # noqa: F401  (still exists on some versions)
+        except ImportError:
+            sync_module = types.ModuleType("pymodbus.client.sync")
+            sync_module.ModbusTcpClient = ModbusTcpClient
+            sync_module.ModbusSerialClient = ModbusSerialClient
+            try:
+                from pymodbus.client import ModbusUdpClient
+                sync_module.ModbusUdpClient = ModbusUdpClient
+            except ImportError:
+                pass
+            sys.modules["pymodbus.client.sync"] = sync_module
+
     def _wrap_read_holding_registers(original, uses_device_id):
         def read_holding_registers(self, address, count=1, **kwargs):
             if uses_device_id:
                 if "slave" in kwargs and "device_id" not in kwargs:
                     kwargs["device_id"] = kwargs.pop("slave")
-                return original(self, address, count=count, **kwargs)
-            return original(self, address, count, **kwargs)
+                if "unit" in kwargs and "device_id" not in kwargs:
+                    kwargs["device_id"] = kwargs.pop("unit")
+                kwargs.pop("unit", None)
+                kwargs.pop("slave", None)
+                result = original(self, address, count=count, **kwargs)
+            else:
+                result = original(self, address, count, **kwargs)
+
+            try:
+                regs = getattr(result, "registers", None)
+                Domoticz.Debug(
+                    "pymodbus compat: read_holding_registers(address={}, count={}, kwargs={}) -> type={}, isError={}, registers_len={}".format(
+                        address, count, kwargs, type(result).__name__,
+                        result.isError() if hasattr(result, "isError") else "n/a",
+                        len(regs) if regs is not None else "n/a",
+                    )
+                )
+            except Exception:
+                pass
+
+            return result
 
         return read_holding_registers
 
     def _wrap_write_registers(original, uses_device_id):
         def write_registers(self, address, values, **kwargs):
-            if uses_device_id and "slave" in kwargs and "device_id" not in kwargs:
-                kwargs["device_id"] = kwargs.pop("slave")
+            if uses_device_id:
+                if "slave" in kwargs and "device_id" not in kwargs:
+                    kwargs["device_id"] = kwargs.pop("slave")
+                if "unit" in kwargs and "device_id" not in kwargs:
+                    kwargs["device_id"] = kwargs.pop("unit")
+                kwargs.pop("unit", None)
+                kwargs.pop("slave", None)
             return original(self, address, values, **kwargs)
 
         return write_registers
