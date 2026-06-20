@@ -99,12 +99,225 @@
 """
 
 import Domoticz
-import solaredge_modbus
+import inspect
 import json
+import sys
+import traceback
+import types
 
 from datetime import datetime, timedelta
-from enum import IntEnum, unique, auto
+from enum import IntEnum, unique
 from pymodbus.exceptions import ConnectionException
+
+
+def _apply_pymodbus_legacy_compat():
+    try:
+        import pymodbus.constants as pymodbus_constants
+    except ImportError:
+        return
+
+    if not hasattr(pymodbus_constants, "Endian"):
+        class Endian:
+            BIG = "big"
+            LITTLE = "little"
+            Big = "big"
+            Little = "little"
+
+        pymodbus_constants.Endian = Endian
+
+    try:
+        import pymodbus.payload
+    except ImportError:
+        from pymodbus.client import ModbusBaseClient
+
+        class BinaryPayloadDecoder:
+            def __init__(self, registers, byteorder="big", wordorder="big"):
+                self._registers = list(registers)
+                self._wordorder = wordorder
+
+            @classmethod
+            def fromRegisters(cls, registers, byteorder="big", wordorder="big"):
+                return cls(registers, byteorder=byteorder, wordorder=wordorder)
+
+            def _decode(self, data_type, count=1):
+                registers = self._registers[:count]
+                self._registers = self._registers[count:]
+                return ModbusBaseClient.convert_from_registers(
+                    registers,
+                    data_type,
+                    word_order=self._wordorder,
+                )
+
+            def decode_16bit_int(self):
+                return self._decode(ModbusBaseClient.DATATYPE.INT16)
+
+            def decode_16bit_uint(self):
+                return self._decode(ModbusBaseClient.DATATYPE.UINT16)
+
+            def decode_32bit_int(self):
+                return self._decode(ModbusBaseClient.DATATYPE.INT32, 2)
+
+            def decode_32bit_uint(self):
+                return self._decode(ModbusBaseClient.DATATYPE.UINT32, 2)
+
+            def decode_64bit_uint(self):
+                return self._decode(ModbusBaseClient.DATATYPE.UINT64, 4)
+
+            def decode_32bit_float(self):
+                return self._decode(ModbusBaseClient.DATATYPE.FLOAT32, 2)
+
+            def decode_string(self, size):
+                register_count = (size + 1) // 2
+                value = self._decode(ModbusBaseClient.DATATYPE.STRING, register_count)
+                return value.encode("utf-8")
+
+            def skip_bytes(self, count):
+                register_count = (count + 1) // 2
+                self._registers = self._registers[register_count:]
+
+        class BinaryPayloadBuilder:
+            def __init__(self, byteorder="big", wordorder="big"):
+                self._registers = []
+                self._wordorder = wordorder
+
+            def _add(self, value, data_type):
+                self._registers.extend(
+                    ModbusBaseClient.convert_to_registers(
+                        value,
+                        data_type,
+                        word_order=self._wordorder,
+                    )
+                )
+
+            def add_16bit_int(self, value):
+                self._add(value, ModbusBaseClient.DATATYPE.INT16)
+
+            def add_16bit_uint(self, value):
+                self._add(value, ModbusBaseClient.DATATYPE.UINT16)
+
+            def add_32bit_int(self, value):
+                self._add(value, ModbusBaseClient.DATATYPE.INT32)
+
+            def add_32bit_uint(self, value):
+                self._add(value, ModbusBaseClient.DATATYPE.UINT32)
+
+            def add_64bit_uint(self, value):
+                self._add(value, ModbusBaseClient.DATATYPE.UINT64)
+
+            def add_32bit_float(self, value):
+                self._add(value, ModbusBaseClient.DATATYPE.FLOAT32)
+
+            def add_string(self, value):
+                self._add(value, ModbusBaseClient.DATATYPE.STRING)
+
+            def to_registers(self):
+                return self._registers
+
+        payload_module = types.ModuleType("pymodbus.payload")
+        payload_module.BinaryPayloadDecoder = BinaryPayloadDecoder
+        payload_module.BinaryPayloadBuilder = BinaryPayloadBuilder
+        sys.modules["pymodbus.payload"] = payload_module
+
+    try:
+        import pymodbus.register_read_message
+    except ImportError:
+        from pymodbus.pdu.register_message import ReadHoldingRegistersResponse
+
+        register_read_message_module = types.ModuleType("pymodbus.register_read_message")
+        register_read_message_module.ReadHoldingRegistersResponse = ReadHoldingRegistersResponse
+        sys.modules["pymodbus.register_read_message"] = register_read_message_module
+
+    try:
+        from pymodbus.client import ModbusSerialClient, ModbusTcpClient
+    except ImportError:
+        return
+
+    if "pymodbus.client.sync" not in sys.modules:
+        try:
+            import pymodbus.client.sync  # noqa: F401  (still exists on some versions)
+        except ImportError:
+            sync_module = types.ModuleType("pymodbus.client.sync")
+            sync_module.ModbusTcpClient = ModbusTcpClient
+            sync_module.ModbusSerialClient = ModbusSerialClient
+            try:
+                from pymodbus.client import ModbusUdpClient
+                sync_module.ModbusUdpClient = ModbusUdpClient
+            except ImportError:
+                pass
+            sys.modules["pymodbus.client.sync"] = sync_module
+
+    def _wrap_read_holding_registers(original, uses_device_id):
+        def read_holding_registers(self, address, count=1, **kwargs):
+            if uses_device_id:
+                if "slave" in kwargs and "device_id" not in kwargs:
+                    kwargs["device_id"] = kwargs.pop("slave")
+                if "unit" in kwargs and "device_id" not in kwargs:
+                    kwargs["device_id"] = kwargs.pop("unit")
+                kwargs.pop("unit", None)
+                kwargs.pop("slave", None)
+                result = original(self, address, count=count, **kwargs)
+            else:
+                result = original(self, address, count, **kwargs)
+
+            try:
+                regs = getattr(result, "registers", None)
+                Domoticz.Debug(
+                    "pymodbus compat: read_holding_registers(address={}, count={}, kwargs={}) -> type={}, isError={}, registers_len={}".format(
+                        address, count, kwargs, type(result).__name__,
+                        result.isError() if hasattr(result, "isError") else "n/a",
+                        len(regs) if regs is not None else "n/a",
+                    )
+                )
+            except Exception:
+                pass
+
+            return result
+
+        return read_holding_registers
+
+    def _wrap_write_registers(original, uses_device_id):
+        def write_registers(self, address, values, **kwargs):
+            if uses_device_id:
+                if "slave" in kwargs and "device_id" not in kwargs:
+                    kwargs["device_id"] = kwargs.pop("slave")
+                if "unit" in kwargs and "device_id" not in kwargs:
+                    kwargs["device_id"] = kwargs.pop("unit")
+                kwargs.pop("unit", None)
+                kwargs.pop("slave", None)
+            return original(self, address, values, **kwargs)
+
+        return write_registers
+
+    for client_cls in (ModbusTcpClient, ModbusSerialClient):
+        if not getattr(client_cls, "_solaredge_legacy_api", False):
+            uses_device_id = "device_id" in inspect.signature(client_cls.read_holding_registers).parameters
+            client_cls.read_holding_registers = _wrap_read_holding_registers(
+                client_cls.read_holding_registers,
+                uses_device_id,
+            )
+            client_cls.write_registers = _wrap_write_registers(
+                client_cls.write_registers,
+                uses_device_id,
+            )
+            client_cls._solaredge_legacy_api = True
+
+    if not getattr(ModbusSerialClient, "_solaredge_legacy_init", False):
+        original_serial_init = ModbusSerialClient.__init__
+        accepts_method = "method" in inspect.signature(original_serial_init).parameters
+
+        if not accepts_method:
+            def serial_init(self, *args, **kwargs):
+                kwargs.pop("method", None)
+                original_serial_init(self, *args, **kwargs)
+
+            ModbusSerialClient.__init__ = serial_init
+
+        ModbusSerialClient._solaredge_legacy_init = True
+
+
+_apply_pymodbus_legacy_compat()
+
+import solaredge_modbus
 
 #
 # Domoticz shows graphs with intervals of 5 minutes.
@@ -373,12 +586,13 @@ class BasePlugin:
 
             inverter_values = None
             try:
-                inverter_values = self.inverter.read_all()
-            except ConnectionException:
+                inverter_values = self.readInverterValues()
+            except ConnectionException as e:
                 inverter_values = None
                 self._LOOKUP_TABLE = None
                 self.retryafter = datetime.now() + self.retrydelay
-                Domoticz.Error("ConnectionException; retrying after: {}".format(self.retryafter))
+                self.disconnectInverter()
+                Domoticz.Error("ConnectionException: {}; retrying after: {}".format(e, self.retryafter))
             else:
 
                 if inverter_values:
@@ -524,8 +738,8 @@ class BasePlugin:
             # Here we go...
             inverter_values = None
             try:
-                inverter_values = self.inverter.read_all()
-            except ConnectionException:
+                inverter_values = self.readInverterValues()
+            except ConnectionException as e:
 
                 # There are multiple reasons why this may fail.
                 # - Perhaps the ip address or port are incorrect.
@@ -536,8 +750,9 @@ class BasePlugin:
 
                 self.retryafter = datetime.now() + self.retrydelay
                 inverter_values = None
+                self.disconnectInverter()
 
-                Domoticz.Log("Connection Exception when trying to contact: {}:{} Device Address: {}".format(Parameters["Address"], Parameters["Port"], Parameters["Mode3"]))
+                Domoticz.Log("Connection Exception when trying to contact: {}:{} Device Address: {} ({})".format(Parameters["Address"], Parameters["Port"], Parameters["Mode3"], e))
                 Domoticz.Log("Retrying to communicate with inverter after: {}".format(self.retryafter))
                 return
 
@@ -618,6 +833,20 @@ class BasePlugin:
         else:
             Domoticz.Log("Retrying to communicate with inverter after: {}".format(self.retryafter))
 
+    def readInverterValues(self):
+        try:
+            return self.inverter.read_all()
+        except ConnectionException as first_error:
+            Domoticz.Debug("ConnectionException during read_all; reconnecting once before retry: {}".format(first_error))
+            self.disconnectInverter()
+            try:
+                values = self.inverter.read_all()
+            except ConnectionException:
+                raise
+            else:
+                Domoticz.Log("Recovered Modbus TCP connection after reconnect.")
+                return values
+
 
     #
     # onStop is called by Domoticz when the plugin is stopped.
@@ -625,10 +854,14 @@ class BasePlugin:
 
     def onStop(self):
         Domoticz.Debug("onStop")
+        self.disconnectInverter()
+
+    def disconnectInverter(self):
         try:
-            self.inverter.client.close()
+            if self.inverter and self.inverter.client:
+                self.inverter.client.close()
         except Exception as e:
-            Domoticz.Debug("onStop: {}".format(e))
+            Domoticz.Debug("disconnectInverter: {}".format(e))
 
 
 #
