@@ -9,10 +9,10 @@
 #
 
 """
-<plugin key="SolarEdge_ModbusTCP" name="SolarEdge ModbusTCP" author="Addie Janssen" version="1.1.6" externallink="https://github.com/addiejanssen/domoticz-solaredge-modbustcp-plugin">
+<plugin key="SolarEdge_ModbusTCP" name="SolarEdge ModbusTCP" author="Addie Janssen" version="1.2.0" externallink="https://github.com/addiejanssen/domoticz-solaredge-modbustcp-plugin">
     <description>
         <h2><br/>SolarEdge ModbusTCP Plugin</h2>
-        <p>Version 1.1.6</p>
+        <p>Version 1.2.0</p>
         <p>Reads data from SolarEdge power inverters over ModbusTCP and creates Domoticz devices for:</p>
         <ul>
             <li>Inverter status and vendor status</li>
