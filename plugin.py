@@ -545,7 +545,7 @@ class BasePlugin:
 
             inverter_values = None
             try:
-                inverter_values = self.inverter.read_all()
+                inverter_values = self.readInverterValues()
             except ConnectionException as e:
                 inverter_values = None
                 self._LOOKUP_TABLE = None
@@ -697,7 +697,7 @@ class BasePlugin:
             # Here we go...
             inverter_values = None
             try:
-                inverter_values = self.inverter.read_all()
+                inverter_values = self.readInverterValues()
             except ConnectionException as e:
 
                 # There are multiple reasons why this may fail.
@@ -791,6 +791,20 @@ class BasePlugin:
                     Domoticz.Debug("inverter_values = '" +format(inverter_values)+"'")
         else:
             Domoticz.Log("Retrying to communicate with inverter after: {}".format(self.retryafter))
+
+    def readInverterValues(self):
+        try:
+            return self.inverter.read_all()
+        except ConnectionException as first_error:
+            Domoticz.Debug("ConnectionException during read_all; reconnecting once before retry: {}".format(first_error))
+            self.disconnectInverter()
+            try:
+                values = self.inverter.read_all()
+            except ConnectionException:
+                raise
+            else:
+                Domoticz.Log("Recovered Modbus TCP connection after reconnect.")
+                return values
 
 
     #
