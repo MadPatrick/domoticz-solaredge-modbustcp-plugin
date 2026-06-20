@@ -546,11 +546,12 @@ class BasePlugin:
             inverter_values = None
             try:
                 inverter_values = self.inverter.read_all()
-            except ConnectionException:
+            except ConnectionException as e:
                 inverter_values = None
                 self._LOOKUP_TABLE = None
                 self.retryafter = datetime.now() + self.retrydelay
-                Domoticz.Error("ConnectionException; retrying after: {}".format(self.retryafter))
+                self.disconnectInverter()
+                Domoticz.Error("ConnectionException: {}; retrying after: {}".format(e, self.retryafter))
             else:
 
                 if inverter_values:
@@ -697,7 +698,7 @@ class BasePlugin:
             inverter_values = None
             try:
                 inverter_values = self.inverter.read_all()
-            except ConnectionException:
+            except ConnectionException as e:
 
                 # There are multiple reasons why this may fail.
                 # - Perhaps the ip address or port are incorrect.
@@ -708,8 +709,9 @@ class BasePlugin:
 
                 self.retryafter = datetime.now() + self.retrydelay
                 inverter_values = None
+                self.disconnectInverter()
 
-                Domoticz.Log("Connection Exception when trying to contact: {}:{} Device Address: {}".format(Parameters["Address"], Parameters["Port"], Parameters["Mode3"]))
+                Domoticz.Log("Connection Exception when trying to contact: {}:{} Device Address: {} ({})".format(Parameters["Address"], Parameters["Port"], Parameters["Mode3"], e))
                 Domoticz.Log("Retrying to communicate with inverter after: {}".format(self.retryafter))
                 return
 
@@ -797,10 +799,14 @@ class BasePlugin:
 
     def onStop(self):
         Domoticz.Debug("onStop")
+        self.disconnectInverter()
+
+    def disconnectInverter(self):
         try:
-            self.inverter.client.close()
+            if self.inverter and self.inverter.client:
+                self.inverter.client.close()
         except Exception as e:
-            Domoticz.Debug("onStop: {}".format(e))
+            Domoticz.Debug("disconnectInverter: {}".format(e))
 
 
 #
