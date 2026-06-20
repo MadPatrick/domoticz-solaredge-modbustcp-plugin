@@ -714,7 +714,8 @@ class BasePlugin:
                             )
                         )
 
-                    Domoticz.Log("Updated {} values out of {}".format(updated, device_count))
+                    if "Mode5" in Parameters and Parameters["Mode5"] == "Extra":
+                        Domoticz.Log("Updated {} values out of {}".format(updated, device_count))
                 else:
                     Domoticz.Log("Inverter returned no information")
 
